@@ -212,6 +212,60 @@ class FITSFixedWarning(AstropyWarning):
     pass
 
 
+# This dictionary maps standard image header keywords for coordinate
+# systems to those used in X-ray event files
+evt_keys = {"CRVAL": "TCRVL",
+            "CRPIX": "TCRPX",
+            "CDELT": "TCDLT",
+            "CTYPE": "TCTYP",
+            "CUNIT": "TCUNI"}
+
+
+def check_for_xray_events(header):
+    # We have to make a copy of this header as a fits.Header object
+    # so we can check if this is a header associated with an X-ray
+    # events file
+    if isinstance(header, fits.Header):
+        evt_header = header
+    else:
+        evt_header = fits.Header.fromstring(header)
+    # X-ray events headers are always named "EVENTS"
+    if evt_header.get("EXTNAME", None) == "EVENTS":
+        # We now construct a new 2D image header corresponding
+        # to the X-ray events header
+        img_header = fits.Header()
+        img_header["NAXIS"] = 2
+        # Look for the X, Y coordinates
+        xnum = None
+        ynum = None
+        for i in range(1, evt_header["TFIELDS"]+1):
+            if evt_header["TTYPE%d" % i].upper() == "X":
+                xnum = i
+            if evt_header["TTYPE%d" % i].upper() == "Y":
+                ynum = i
+        # If we don't find the coordinates, raise an error
+        if xnum is None or ynum is None:
+            raise InvalidCoordinateError()
+        # Determine the dimensions of the image
+        img_header["NAXIS1"] = int(evt_header["TLMAX%d" % xnum] -
+                                   evt_header["TLMIN%d" % xnum])
+        img_header["NAXIS2"] = int(evt_header["TLMAX%d" % ynum] -
+                                   evt_header["TLMIN%d" % ynum])
+        # Create the new image header using the map of standard
+        # event header keywords to their corresponding image
+        # header keywords
+        for i, j in enumerate([xnum, ynum]):
+            for img_key, evt_key in evt_keys.items():
+                ikey = "{}{}".format(img_key, i+1)
+                ekey = "{}{}".format(evt_key, j)
+                img_header[ikey] = evt_header[ekey]
+        return img_header
+    else:
+        # If this isn't an X-ray events header, simply return the original
+        # header object
+        return header
+
+
 class WCS(WCSBase):
     """WCS objects perform standard WCS transformations, and correct for
     `SIP`_ and `distortion paper`_ table-lookup transformations, based
@@ -401,6 +455,8 @@ class WCS(WCSBase):
                     raise TypeError(
                         "header must be a string, an astropy.io.fits.Header "
                         "object, or a dict-like object")
+
+            header = check_for_xray_events(header)
 
             if isinstance(header, fits.Header):
                 header_string = header.tostring().rstrip()
